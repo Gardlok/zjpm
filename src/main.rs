@@ -32,8 +32,8 @@ enum Command {
     },
     /// List plugins managed by zjpm
     List,
-    /// Update one plugin, or all managed plugins
-    Update { plugin: Option<String> },
+    /// Update one managed GitHub plugin
+    Update { plugin: String },
     /// Remove a managed plugin
     Remove { plugin: String },
     /// Check the local zjpm setup
@@ -57,10 +57,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             asset,
         } => install_target(&source, name.as_deref(), asset.as_deref())?,
         Command::List => list_plugins()?,
-        Command::Update { plugin } => match plugin {
-            Some(plugin) => println!("update is not implemented yet: {plugin}"),
-            None => println!("update is not implemented yet"),
-        },
+        Command::Update { plugin } => update_plugin(&plugin)?,
         Command::Remove { plugin } => {
             println!("remove is not implemented yet: {plugin}");
         }
@@ -134,6 +131,7 @@ fn install_local(source: &Path, requested_name: Option<&str>) -> Result<(), Box<
             name: name.clone(),
             source: plugin_source.clone(),
             version: None,
+            asset: None,
         },
         LockedPlugin {
             name: name.clone(),
@@ -172,6 +170,7 @@ fn install_github(
             name: name.clone(),
             source: plugin_source.clone(),
             version: None,
+            asset: requested_asset.map(str::to_owned),
         },
         LockedPlugin {
             name: name.clone(),
@@ -189,6 +188,77 @@ fn install_github(
         &installed.receipt.sha256,
         &installed.receipt.current_path,
     );
+
+    Ok(())
+}
+
+fn update_plugin(name: &str) -> Result<(), Box<dyn Error>> {
+    let paths = StorePaths::discover()?;
+    let manifest = Manifest::load(&paths.manifest_path())?;
+    let mut lockfile = Lockfile::load(&paths.lockfile_path())?;
+
+    let plugin = manifest
+        .plugins()
+        .iter()
+        .find(|plugin| plugin.name == name)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("plugin '{name}' is not managed by zjpm"),
+            )
+        })?;
+
+    if let Some(version) = &plugin.version {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "plugin '{name}' is pinned to {version}; remove the manifest version pin before updating"
+            ),
+        )
+        .into());
+    }
+
+    let PluginSource::GitHub { owner, repo } = &plugin.source else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "plugin '{name}' uses a local path; reinstall that path to refresh it"
+            ),
+        )
+        .into());
+    };
+
+    let repository: GitHubRepository = format!("{owner}/{repo}").parse()?;
+    let client = GitHubClient::from_env();
+    let resolved = client.resolve_latest(&repository, plugin.asset.as_deref())?;
+    let locked = locked_plugin(&lockfile, name);
+
+    if locked.is_some_and(|locked| resolved.matches_locked(locked)) {
+        println!(
+            "{name} is already current at {} ({})",
+            resolved.tag_name, resolved.asset_name
+        );
+        return Ok(());
+    }
+
+    let installer = Installer::new(paths.clone());
+    let installed = client.install_resolved(&resolved, &installer, name)?;
+    let source = plugin.source.clone();
+
+    lockfile.upsert(LockedPlugin {
+        name: name.to_owned(),
+        source,
+        version: Some(installed.tag_name.clone()),
+        asset: installed.asset_name.clone(),
+        sha256: installed.receipt.sha256.clone(),
+        bytes: installed.receipt.bytes,
+    });
+    lockfile.save_atomic(&paths.lockfile_path())?;
+
+    println!("Updated {name} to {}", installed.tag_name);
+    println!("  asset: {}", installed.asset_name);
+    println!("  sha256: {}", installed.receipt.sha256);
+    println!("  current: {}", installed.receipt.current_path.display());
 
     Ok(())
 }

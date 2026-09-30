@@ -45,6 +45,19 @@ zjpm first resolves the latest release metadata. If the tag, selected asset, byt
 
 An explicit GitHub asset choice is stored as manifest intent, so a plugin installed with `--asset zjframes.wasm` keeps tracking that asset on later updates.
 
+## History and rollback
+
+zjpm records resolved install/update transitions alongside each plugin's managed versions:
+
+```sh
+zjpm history zjstatus
+zjpm rollback zjstatus
+```
+
+History is resolved state, not user intent, so rollback changes the active bytes and lockfile while leaving `plugins.kdl` untouched. A rollback is itself recorded as a transition, which means a later rollback can move back across that transition again.
+
+Older installs created before history support can still show their current lock state, but zjpm will not guess metadata for old digest files. Rollback only uses states it has recorded explicitly.
+
 ## Manifest
 
 By default, zjpm reads `~/.config/zjpm/plugins.kdl`:

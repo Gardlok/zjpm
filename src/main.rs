@@ -5,7 +5,7 @@ use std::path::Path;
 
 use zjpm::{
     GitHubClient, GitHubRepository, InstallError, Installer, LockedPlugin, Lockfile, Manifest,
-    PluginSource, PluginSpec, StorePaths,
+    PluginHistory, PluginSource, PluginSpec, StorePaths,
 };
 
 #[derive(Parser)]
@@ -34,6 +34,10 @@ enum Command {
     List,
     /// Update one managed GitHub plugin
     Update { plugin: String },
+    /// Show recorded resolved states for a managed plugin
+    History { plugin: String },
+    /// Activate the previous recorded version of a managed plugin
+    Rollback { plugin: String },
     /// Remove a managed plugin
     Remove { plugin: String },
     /// Check the local zjpm setup
@@ -58,6 +62,8 @@ fn run() -> Result<(), Box<dyn Error>> {
         } => install_target(&source, name.as_deref(), asset.as_deref())?,
         Command::List => list_plugins()?,
         Command::Update { plugin } => update_plugin(&plugin)?,
+        Command::History { plugin } => show_history(&plugin)?,
+        Command::Rollback { plugin } => rollback_plugin(&plugin)?,
         Command::Remove { plugin } => {
             println!("remove is not implemented yet: {plugin}");
         }
@@ -273,15 +279,18 @@ fn update_plugin(name: &str) -> Result<(), Box<dyn Error>> {
     let installer = Installer::new(paths.clone());
     let installed = client.install_resolved(&resolved, &installer, name)?;
 
-    lockfile.upsert(LockedPlugin {
-        name: name.to_owned(),
-        source: plugin.source.clone(),
-        version: Some(installed.tag_name.clone()),
-        asset: installed.asset_name.clone(),
-        sha256: installed.receipt.sha256.clone(),
-        bytes: installed.receipt.bytes,
-    });
-    lockfile.save_atomic(&paths.lockfile_path())?;
+    persist_locked_state(
+        &paths,
+        &mut lockfile,
+        LockedPlugin {
+            name: name.to_owned(),
+            source: plugin.source.clone(),
+            version: Some(installed.tag_name.clone()),
+            asset: installed.asset_name.clone(),
+            sha256: installed.receipt.sha256.clone(),
+            bytes: installed.receipt.bytes,
+        },
+    )?;
 
     if manifest
         .plugins()
@@ -307,12 +316,138 @@ fn persist_state(
     locked: LockedPlugin,
 ) -> Result<(), Box<dyn Error>> {
     let mut lockfile = Lockfile::load(&paths.lockfile_path())?;
-    lockfile.upsert(locked);
-    lockfile.save_atomic(&paths.lockfile_path())?;
+    persist_locked_state(paths, &mut lockfile, locked)?;
 
     let mut manifest = Manifest::load(&paths.manifest_path())?;
     manifest.upsert(plugin);
     manifest.save_atomic(&paths.manifest_path())?;
+
+    Ok(())
+}
+
+fn persist_locked_state(
+    paths: &StorePaths,
+    lockfile: &mut Lockfile,
+    locked: LockedPlugin,
+) -> Result<(), Box<dyn Error>> {
+    let history_path = paths.history_path(&locked.name);
+    let mut history = PluginHistory::load(&history_path, &locked.name)?;
+
+    if let Some(previous) = locked_plugin(lockfile, &locked.name).cloned()
+        && history.record(previous)
+    {
+        history.save_atomic(&history_path)?;
+    }
+
+    lockfile.upsert(locked.clone());
+    lockfile.save_atomic(&paths.lockfile_path())?;
+
+    if history.record(locked) {
+        history.save_atomic(&history_path)?;
+    }
+
+    Ok(())
+}
+
+fn show_history(name: &str) -> Result<(), Box<dyn Error>> {
+    let paths = StorePaths::discover()?;
+    let manifest = Manifest::load(&paths.manifest_path())?;
+    let lockfile = Lockfile::load(&paths.lockfile_path())?;
+
+    manifest
+        .plugins()
+        .iter()
+        .find(|plugin| plugin.name == name)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("plugin '{name}' is not managed by zjpm"),
+            )
+        })?;
+
+    let current = locked_plugin(&lockfile, name).cloned();
+    let mut entries = PluginHistory::load(&paths.history_path(name), name)?
+        .entries()
+        .to_vec();
+
+    if let Some(current) = &current
+        && entries.last() != Some(current)
+    {
+        entries.push(current.clone());
+    }
+
+    if entries.is_empty() {
+        println!("No resolved history recorded for {name}.");
+        return Ok(());
+    }
+
+    println!("STATE    VERSION       ASSET                     SHA256        BYTES");
+
+    for (index, entry) in entries.iter().rev().enumerate() {
+        let state = if index == 0 && current.as_ref() == Some(entry) {
+            "current"
+        } else {
+            ""
+        };
+        let version = entry.version.as_deref().unwrap_or("local");
+        let short_sha = &entry.sha256[..12];
+
+        println!(
+            "{state:<8} {version:<13} {:<25} {short_sha:<12} {}",
+            entry.asset, entry.bytes
+        );
+    }
+
+    Ok(())
+}
+
+fn rollback_plugin(name: &str) -> Result<(), Box<dyn Error>> {
+    let paths = StorePaths::discover()?;
+    let manifest = Manifest::load(&paths.manifest_path())?;
+    let mut lockfile = Lockfile::load(&paths.lockfile_path())?;
+
+    manifest
+        .plugins()
+        .iter()
+        .find(|plugin| plugin.name == name)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("plugin '{name}' is not managed by zjpm"),
+            )
+        })?;
+
+    let current = locked_plugin(&lockfile, name).cloned().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("plugin '{name}' has no resolved lock state"),
+        )
+    })?;
+
+    let history = PluginHistory::load(&paths.history_path(name), name)?;
+    let target = history
+        .previous_distinct(&current.sha256)
+        .cloned()
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("plugin '{name}' has no previous recorded version to roll back to"),
+            )
+        })?;
+
+    let installer = Installer::new(paths.clone());
+    let current_path = installer.activate_blob(name, &target.sha256)?;
+
+    persist_locked_state(&paths, &mut lockfile, target.clone())?;
+
+    println!("Rolled back {name}");
+    println!(
+        "  version: {}",
+        target.version.as_deref().unwrap_or("local")
+    );
+    println!("  asset: {}", target.asset);
+    println!("  sha256: {}", target.sha256);
+    println!("  current: {}", current_path.display());
 
     Ok(())
 }

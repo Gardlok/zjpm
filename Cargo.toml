@@ -9,3 +9,4 @@ description = "A package manager for Zellij plugins"
 clap = { version = "4.5", features = ["derive"] }
 kdl = { version = "6.7", default-features = false, features = ["span"] }
 sha2 = "0.10"
+wasmparser = { version = "0.259", default-features = false, features = ["std", "validate", "simd"] }

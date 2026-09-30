@@ -25,6 +25,10 @@ enum Command {
         /// Managed plugin name; defaults to the file or repository name
         #[arg(long)]
         name: Option<String>,
+
+        /// Exact GitHub release asset to install when a release has several .wasm files
+        #[arg(long)]
+        asset: Option<String>,
     },
     /// List plugins managed by zjpm
     List,
@@ -47,7 +51,11 @@ fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Install { source, name } => install_target(&source, name.as_deref())?,
+        Command::Install {
+            source,
+            name,
+            asset,
+        } => install_target(&source, name.as_deref(), asset.as_deref())?,
         Command::List => list_plugins()?,
         Command::Update { plugin } => match plugin {
             Some(plugin) => println!("update is not implemented yet: {plugin}"),
@@ -64,14 +72,25 @@ fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn install_target(source: &str, requested_name: Option<&str>) -> Result<(), Box<dyn Error>> {
+fn install_target(
+    source: &str,
+    requested_name: Option<&str>,
+    requested_asset: Option<&str>,
+) -> Result<(), Box<dyn Error>> {
     let path = Path::new(source);
 
     if path.exists() || looks_like_local_path(source) {
+        if requested_asset.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--asset only applies to GitHub installs",
+            )
+            .into());
+        }
         install_local(path, requested_name)
     } else {
         let repository: GitHubRepository = source.parse()?;
-        install_github(&repository, requested_name)
+        install_github(&repository, requested_name, requested_asset)
     }
 }
 
@@ -134,13 +153,15 @@ fn install_local(source: &Path, requested_name: Option<&str>) -> Result<(), Box<
 fn install_github(
     repository: &GitHubRepository,
     requested_name: Option<&str>,
+    requested_asset: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
     let name = requested_name.unwrap_or(repository.repo()).to_owned();
     let paths = StorePaths::discover()?;
     let installer = Installer::new(paths.clone());
     let client = GitHubClient::from_env();
 
-    let installed = client.install_latest(repository, &installer, &name)?;
+    let installed =
+        client.install_latest(repository, &installer, &name, requested_asset)?;
     let plugin_source = PluginSource::GitHub {
         owner: repository.owner().to_owned(),
         repo: repository.repo().to_owned(),

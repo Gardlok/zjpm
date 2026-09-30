@@ -17,13 +17,19 @@ zjpm install ./my-plugin.wasm
 zjpm install ./plugin.wasm --name my-plugin
 ```
 
-Or install the latest published GitHub release when it contains exactly one uploaded `.wasm` asset:
+Or install the latest published GitHub release:
 
 ```sh
 zjpm install dj95/zjstatus
 ```
 
-GitHub installs resolve the latest non-draft, non-prerelease release through the GitHub REST API. zjpm refuses to guess when a release has zero or multiple WASM assets. If `GITHUB_TOKEN` is set, it is used for API authentication.
+When a release has several WASM assets, zjpm first looks for `<repository>.wasm`. You can choose another one explicitly:
+
+```sh
+zjpm install dj95/zjstatus --asset zjframes.wasm --name zjframes
+```
+
+GitHub installs resolve the latest non-draft, non-prerelease release through the GitHub REST API. If the asset is still ambiguous, zjpm lists the choices instead of guessing. If `GITHUB_TOKEN` is set, it is used for API authentication.
 
 Every successful install validates the full WebAssembly module, streams it through SHA-256 into the content store, activates it without copying those bytes again, then records intent in `plugins.kdl` and exact resolved state in `plugins.lock.kdl`.
 

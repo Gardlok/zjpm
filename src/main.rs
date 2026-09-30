@@ -4,8 +4,8 @@ use std::io;
 use std::path::Path;
 
 use zjpm::{
-    GitHubClient, GitHubRepository, Installer, LockedPlugin, Lockfile, Manifest, PluginSource,
-    PluginSpec, StorePaths,
+    GitHubClient, GitHubRepository, InstallError, Installer, LockedPlugin, Lockfile, Manifest,
+    PluginSource, PluginSpec, StorePaths,
 };
 
 #[derive(Parser)]
@@ -243,22 +243,33 @@ fn update_plugin(name: &str) -> Result<(), Box<dyn Error>> {
     let client = GitHubClient::from_env();
     let resolved = client.resolve_latest(&repository, plugin.asset.as_deref())?;
 
-    if locked.is_some_and(|locked| resolved.matches_locked(locked)) {
-        if manifest
-            .plugins()
-            .iter()
-            .find(|existing| existing.name == name)
-            .is_some_and(|existing| existing.asset != plugin.asset)
-        {
-            manifest.upsert(plugin);
-            manifest.save_atomic(&paths.manifest_path())?;
-        }
+    if let Some(locked) = locked
+        && resolved.matches_locked(locked)
+    {
+        let installer = Installer::new(paths.clone());
 
-        println!(
-            "{name} is already current at {} ({})",
-            resolved.tag_name, resolved.asset_name
-        );
-        return Ok(());
+        match installer.activate_blob(name, &locked.sha256) {
+            Ok(current) => {
+                if manifest
+                    .plugins()
+                    .iter()
+                    .find(|existing| existing.name == name)
+                    .is_some_and(|existing| existing.asset != plugin.asset)
+                {
+                    manifest.upsert(plugin);
+                    manifest.save_atomic(&paths.manifest_path())?;
+                }
+
+                println!(
+                    "{name} is already current at {} ({})",
+                    resolved.tag_name, resolved.asset_name
+                );
+                println!("  current: {}", current.display());
+                return Ok(());
+            }
+            Err(InstallError::BlobUnavailable { .. }) => {}
+            Err(error) => return Err(error.into()),
+        }
     }
 
     let installer = Installer::new(paths.clone());

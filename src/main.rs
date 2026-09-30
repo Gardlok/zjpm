@@ -194,13 +194,14 @@ fn install_github(
 
 fn update_plugin(name: &str) -> Result<(), Box<dyn Error>> {
     let paths = StorePaths::discover()?;
-    let manifest = Manifest::load(&paths.manifest_path())?;
+    let mut manifest = Manifest::load(&paths.manifest_path())?;
     let mut lockfile = Lockfile::load(&paths.lockfile_path())?;
 
-    let plugin = manifest
+    let mut plugin = manifest
         .plugins()
         .iter()
         .find(|plugin| plugin.name == name)
+        .cloned()
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
@@ -229,11 +230,30 @@ fn update_plugin(name: &str) -> Result<(), Box<dyn Error>> {
     };
 
     let repository: GitHubRepository = format!("{owner}/{repo}").parse()?;
+    let locked = locked_plugin(&lockfile, name);
+    let conventional_asset = format!("{repo}.wasm");
+
+    if plugin.asset.is_none()
+        && let Some(locked) = locked
+        && !locked.asset.eq_ignore_ascii_case(&conventional_asset)
+    {
+        plugin.asset = Some(locked.asset.clone());
+    }
+
     let client = GitHubClient::from_env();
     let resolved = client.resolve_latest(&repository, plugin.asset.as_deref())?;
-    let locked = locked_plugin(&lockfile, name);
 
     if locked.is_some_and(|locked| resolved.matches_locked(locked)) {
+        if manifest
+            .plugins()
+            .iter()
+            .find(|existing| existing.name == name)
+            .is_some_and(|existing| existing.asset != plugin.asset)
+        {
+            manifest.upsert(plugin);
+            manifest.save_atomic(&paths.manifest_path())?;
+        }
+
         println!(
             "{name} is already current at {} ({})",
             resolved.tag_name, resolved.asset_name
@@ -243,17 +263,26 @@ fn update_plugin(name: &str) -> Result<(), Box<dyn Error>> {
 
     let installer = Installer::new(paths.clone());
     let installed = client.install_resolved(&resolved, &installer, name)?;
-    let source = plugin.source.clone();
 
     lockfile.upsert(LockedPlugin {
         name: name.to_owned(),
-        source,
+        source: plugin.source.clone(),
         version: Some(installed.tag_name.clone()),
         asset: installed.asset_name.clone(),
         sha256: installed.receipt.sha256.clone(),
         bytes: installed.receipt.bytes,
     });
     lockfile.save_atomic(&paths.lockfile_path())?;
+
+    if manifest
+        .plugins()
+        .iter()
+        .find(|existing| existing.name == name)
+        .is_some_and(|existing| existing.asset != plugin.asset)
+    {
+        manifest.upsert(plugin);
+        manifest.save_atomic(&paths.manifest_path())?;
+    }
 
     println!("Updated {name} to {}", installed.tag_name);
     println!("  asset: {}", installed.asset_name);

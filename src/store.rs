@@ -1,5 +1,4 @@
 use sha2::{Digest, Sha256};
-use wasmparser::{Chunk, FuncValidatorAllocations, Parser, ValidPayload, Validator};
 use std::env;
 use std::error::Error;
 use std::fmt;
@@ -8,6 +7,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use wasmparser::{Chunk, FuncValidatorAllocations, Parser, ValidPayload, Validator};
 
 const WASM_MAGIC: [u8; 4] = [0x00, 0x61, 0x73, 0x6d];
 const COPY_BUFFER_SIZE: usize = 64 * 1024;
@@ -453,10 +453,7 @@ impl StreamingWasmValidator {
             }
 
             let data = &self.pending[self.consumed..];
-            let chunk = self
-                .parser
-                .parse(data, eof)
-                .map_err(|error| invalid_wasm(error))?;
+            let chunk = self.parser.parse(data, eof).map_err(invalid_wasm)?;
 
             let Chunk::Parsed { consumed, payload } = chunk else {
                 if eof {
@@ -465,18 +462,13 @@ impl StreamingWasmValidator {
                 return Ok(());
             };
 
-            let validated = self
-                .validator
-                .payload(&payload)
-                .map_err(|error| invalid_wasm(error))?;
+            let validated = self.validator.payload(&payload).map_err(invalid_wasm)?;
 
             match validated {
                 ValidPayload::Func(function, body) => {
                     let allocations = std::mem::take(&mut self.allocations);
                     let mut validator = function.into_validator(allocations);
-                    validator
-                        .validate(&body)
-                        .map_err(|error| invalid_wasm(error))?;
+                    validator.validate(&body).map_err(invalid_wasm)?;
                     self.allocations = validator.into_allocations();
                 }
                 ValidPayload::End(_) => {
@@ -545,7 +537,10 @@ impl fmt::Display for ContentStoreError {
         match self {
             Self::Store(error) => error.fmt(formatter),
             Self::InvalidWasm { reason } => {
-                write!(formatter, "plugin is not a valid WebAssembly module: {reason}")
+                write!(
+                    formatter,
+                    "plugin is not a valid WebAssembly module: {reason}"
+                )
             }
             Self::CorruptExistingBlob { path } => write!(
                 formatter,
@@ -715,13 +710,11 @@ mod tests {
 
         if !payload.is_empty() {
             let section_size = payload.len() + 2;
-            assert!(section_size < 128, "test helper only supports small payloads");
-            wasm.extend_from_slice(&[
-                0x00,
-                section_size as u8,
-                0x01,
-                b'z',
-            ]);
+            assert!(
+                section_size < 128,
+                "test helper only supports small payloads"
+            );
+            wasm.extend_from_slice(&[0x00, section_size as u8, 0x01, b'z']);
             wasm.extend_from_slice(payload);
         }
 
@@ -825,10 +818,8 @@ mod tests {
     fn accepts_a_valid_function_body() {
         let (_root, store) = test_store();
         let wasm = [
-            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-            0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
-            0x03, 0x02, 0x01, 0x00,
-            0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b,
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+            0x03, 0x02, 0x01, 0x00, 0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b,
         ];
 
         let receipt = store.ingest_wasm(wasm.as_slice()).unwrap();
@@ -841,10 +832,8 @@ mod tests {
     fn rejects_an_invalid_function_body() {
         let (_root, store) = test_store();
         let wasm = [
-            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-            0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
-            0x03, 0x02, 0x01, 0x00,
-            0x0a, 0x04, 0x01, 0x02, 0x00, 0xff,
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+            0x03, 0x02, 0x01, 0x00, 0x0a, 0x04, 0x01, 0x02, 0x00, 0xff,
         ];
 
         let error = store.ingest_wasm(wasm.as_slice()).unwrap_err();

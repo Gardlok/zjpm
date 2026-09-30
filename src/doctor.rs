@@ -1,5 +1,5 @@
 use crate::{
-    Lockfile, Manifest, PluginHistory, PluginSource, StoreError, StorePaths,
+    Lockfile, Manifest, PluginHistory, StoreError, StorePaths,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -490,7 +490,7 @@ fn short_sha(sha256: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Installer, LockedPlugin, PluginSpec};
+    use crate::{Installer, LockedPlugin, PluginSource, PluginSpec};
     use std::env;
     use std::sync::atomic::{AtomicU64, Ordering};
 

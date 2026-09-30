@@ -409,7 +409,11 @@ plugin "local" {
         .parse::<Manifest>()
         .unwrap_err();
 
-        assert!(error.to_string().contains("only select an asset for a GitHub source"));
+        assert!(
+            error
+                .to_string()
+                .contains("only select an asset for a GitHub source")
+        );
     }
 
     #[test]

@@ -222,9 +222,7 @@ fn update_plugin(name: &str) -> Result<(), Box<dyn Error>> {
     let PluginSource::GitHub { owner, repo } = &plugin.source else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!(
-                "plugin '{name}' uses a local path; reinstall that path to refresh it"
-            ),
+            format!("plugin '{name}' uses a local path; reinstall that path to refresh it"),
         )
         .into());
     };

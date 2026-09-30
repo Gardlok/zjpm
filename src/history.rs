@@ -1,6 +1,6 @@
 use crate::fsutil::write_atomic;
-use crate::manifest::{PluginSource, validate_plugin_name};
 use crate::lockfile::LockedPlugin;
+use crate::manifest::{PluginSource, validate_plugin_name};
 use kdl::{KdlDocument, KdlEntry, KdlNode};
 use std::error::Error;
 use std::fmt;
@@ -69,11 +69,9 @@ impl PluginHistory {
         }
 
         document.autoformat();
-        write_atomic(path, document.to_string().as_bytes()).map_err(|source| {
-            HistoryError::Write {
-                path: path.to_path_buf(),
-                source,
-            }
+        write_atomic(path, document.to_string().as_bytes()).map_err(|source| HistoryError::Write {
+            path: path.to_path_buf(),
+            source,
         })
     }
 
@@ -143,7 +141,9 @@ fn parse_state(node: &KdlNode) -> Result<LockedPlugin, HistoryError> {
     validate_plugin_name(&name).map_err(HistoryError::Schema)?;
 
     let children = node.children().ok_or_else(|| {
-        HistoryError::Schema(format!("history state for '{name}' is missing its state block"))
+        HistoryError::Schema(format!(
+            "history state for '{name}' is missing its state block"
+        ))
     })?;
 
     let mut source = None;
@@ -255,9 +255,7 @@ fn push_integer_node(document: &mut KdlDocument, name: &str, value: i128) {
 
 fn positional_string<'a>(node: &'a KdlNode, label: &str) -> Result<&'a str, HistoryError> {
     if node.entries().len() != 1 || node.entries()[0].name().is_some() {
-        return Err(HistoryError::Schema(format!(
-            "{label} must be one string"
-        )));
+        return Err(HistoryError::Schema(format!("{label} must be one string")));
     }
 
     node.entries()[0]
@@ -279,9 +277,7 @@ fn scalar_string<'a>(node: &'a KdlNode, label: &str) -> Result<&'a str, HistoryE
 fn scalar_integer(node: &KdlNode, label: &str) -> Result<i128, HistoryError> {
     if node.children().is_some() || node.entries().len() != 1 || node.entries()[0].name().is_some()
     {
-        return Err(HistoryError::Schema(format!(
-            "{label} must be one integer"
-        )));
+        return Err(HistoryError::Schema(format!("{label} must be one integer")));
     }
 
     node.entries()[0]

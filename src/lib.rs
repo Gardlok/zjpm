@@ -1,7 +1,7 @@
 mod fsutil;
 
-pub mod history;
 pub mod github;
+pub mod history;
 pub mod install;
 pub mod lockfile;
 pub mod manifest;

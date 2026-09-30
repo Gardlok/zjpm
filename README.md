@@ -33,6 +33,18 @@ GitHub installs resolve the latest non-draft, non-prerelease release through the
 
 Every successful install validates the full WebAssembly module, streams it through SHA-256 into the content store, activates it without copying those bytes again, then records intent in `plugins.kdl` and exact resolved state in `plugins.lock.kdl`.
 
+## Update
+
+Update a managed GitHub plugin with:
+
+```sh
+zjpm update zjstatus
+```
+
+zjpm first resolves the latest release metadata. If the tag, selected asset, byte count, and GitHub SHA-256 all match the lockfile, it reports that the plugin is already current without downloading the WASM again. Otherwise it streams and verifies the new asset through the same install pipeline. Local-path plugins are refreshed by reinstalling their path, and manifest version pins block automatic updates.
+
+An explicit GitHub asset choice is stored as manifest intent, so a plugin installed with `--asset zjframes.wasm` keeps tracking that asset on later updates.
+
 ## Manifest
 
 By default, zjpm reads `~/.config/zjpm/plugins.kdl`:
@@ -45,6 +57,11 @@ plugin "zjstatus" {
 plugin "pinned-example" {
     source "github:owner/repo"
     version "1.2.3"
+}
+
+plugin "zjframes" {
+    source "github:dj95/zjstatus"
+    asset "zjframes.wasm"
 }
 ```
 

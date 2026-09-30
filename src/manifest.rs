@@ -55,6 +55,10 @@ impl Manifest {
                 push_string_node(children, "version", version.clone());
             }
 
+            if let Some(asset) = &plugin.asset {
+                push_string_node(children, "asset", asset.clone());
+            }
+
             document.nodes_mut().push(node);
         }
 
@@ -104,6 +108,7 @@ pub struct PluginSpec {
     pub name: String,
     pub source: PluginSource,
     pub version: Option<String>,
+    pub asset: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,6 +212,7 @@ fn parse_plugin(node: &KdlNode) -> Result<PluginSpec, ManifestError> {
 
     let mut source = None;
     let mut version = None;
+    let mut asset = None;
 
     for child in children.nodes() {
         match child.name().value() {
@@ -238,6 +244,21 @@ fn parse_plugin(node: &KdlNode) -> Result<PluginSpec, ManifestError> {
                 }
                 version = Some(value.to_owned());
             }
+            "asset" => {
+                if asset.is_some() {
+                    return Err(ManifestError::Schema(format!(
+                        "plugin '{name}' has more than one asset"
+                    )));
+                }
+
+                let value = scalar_string(child, "asset")?;
+                if value.trim().is_empty() || !value.to_ascii_lowercase().ends_with(".wasm") {
+                    return Err(ManifestError::Schema(format!(
+                        "plugin '{name}' asset must name a .wasm file"
+                    )));
+                }
+                asset = Some(value.to_owned());
+            }
             other => {
                 return Err(ManifestError::Schema(format!(
                     "plugin '{name}' has unknown field '{other}'"
@@ -249,10 +270,17 @@ fn parse_plugin(node: &KdlNode) -> Result<PluginSpec, ManifestError> {
     let source = source
         .ok_or_else(|| ManifestError::Schema(format!("plugin '{name}' is missing a source")))?;
 
+    if asset.is_some() && matches!(&source, PluginSource::Path(_)) {
+        return Err(ManifestError::Schema(format!(
+            "plugin '{name}' can only select an asset for a GitHub source"
+        )));
+    }
+
     Ok(PluginSpec {
         name,
         source,
         version,
+        asset,
     })
 }
 
@@ -321,6 +349,7 @@ plugin "local-clock" {
 plugin "pinned" {
     source "github:example/pinned"
     version "1.2.3"
+    asset "pinned.wasm"
 }
 "#
         .parse()
@@ -330,6 +359,7 @@ plugin "pinned" {
         assert_eq!(manifest.plugins[0].name, "zjstatus");
         assert_eq!(manifest.plugins[0].version, None);
         assert_eq!(manifest.plugins[1].version.as_deref(), Some("dev"));
+        assert_eq!(manifest.plugins[2].asset.as_deref(), Some("pinned.wasm"));
         assert_eq!(
             manifest.plugins[2].source,
             PluginSource::GitHub {
@@ -369,6 +399,38 @@ plugin "../escape" {
     }
 
     #[test]
+    fn rejects_asset_selection_for_local_sources() {
+        let error = r#"
+plugin "local" {
+    source "path:/tmp/local.wasm"
+    asset "other.wasm"
+}
+"#
+        .parse::<Manifest>()
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("only select an asset for a GitHub source")
+        );
+    }
+
+    #[test]
+    fn rejects_non_wasm_asset_selection() {
+        let error = r#"
+plugin "remote" {
+    source "github:owner/remote"
+    asset "remote.zip"
+}
+"#
+        .parse::<Manifest>()
+        .unwrap_err();
+
+        assert!(error.to_string().contains("must name a .wasm file"));
+    }
+
+    #[test]
     fn rejects_unknown_plugin_fields() {
         let error = r#"
 plugin "example" {
@@ -399,6 +461,7 @@ plugin "two" {
             name: "one".to_owned(),
             source: PluginSource::Path("/tmp/a weird \"plugin\".wasm".to_owned()),
             version: None,
+            asset: None,
         });
 
         let mut document = KdlDocument::new();

@@ -33,9 +33,7 @@ impl FromStr for Manifest {
     type Err = ManifestError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        let document = input
-            .parse::<KdlDocument>()
-            .map_err(ManifestError::Parse)?;
+        let document = input.parse::<KdlDocument>().map_err(ManifestError::Parse)?;
 
         let mut plugins = Vec::with_capacity(document.nodes().len());
         let mut names = BTreeSet::new();
@@ -161,7 +159,9 @@ fn parse_plugin(node: &KdlNode) -> Result<PluginSpec, ManifestError> {
     validate_plugin_name(&name)?;
 
     let children = node.children().ok_or_else(|| {
-        ManifestError::Schema(format!("plugin '{name}' is missing its configuration block"))
+        ManifestError::Schema(format!(
+            "plugin '{name}' is missing its configuration block"
+        ))
     })?;
 
     let mut source = None;
@@ -177,9 +177,10 @@ fn parse_plugin(node: &KdlNode) -> Result<PluginSpec, ManifestError> {
                 }
 
                 let value = scalar_string(child, "source")?;
-                source = Some(value.parse::<PluginSource>().map_err(|error| {
-                    ManifestError::Schema(format!("plugin '{name}': {error}"))
-                })?);
+                source =
+                    Some(value.parse::<PluginSource>().map_err(|error| {
+                        ManifestError::Schema(format!("plugin '{name}': {error}"))
+                    })?);
             }
             "version" => {
                 if version.is_some() {
@@ -204,9 +205,8 @@ fn parse_plugin(node: &KdlNode) -> Result<PluginSpec, ManifestError> {
         }
     }
 
-    let source = source.ok_or_else(|| {
-        ManifestError::Schema(format!("plugin '{name}' is missing a source"))
-    })?;
+    let source = source
+        .ok_or_else(|| ManifestError::Schema(format!("plugin '{name}' is missing a source")))?;
 
     Ok(PluginSpec {
         name,

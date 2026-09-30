@@ -165,7 +165,10 @@ impl fmt::Display for StoreError {
                 formatter,
                 "could not find a home directory; set ZJPM_CONFIG_DIR and ZJPM_DATA_DIR"
             ),
-            Self::InvalidSha256 => write!(formatter, "SHA-256 digest must be 64 hexadecimal characters"),
+            Self::InvalidSha256 => write!(
+                formatter,
+                "SHA-256 digest must be 64 hexadecimal characters"
+            ),
         }
     }
 }

@@ -20,13 +20,9 @@ enum Command {
     /// List plugins managed by zjpm
     List,
     /// Update one plugin, or all managed plugins
-    Update {
-        plugin: Option<String>,
-    },
+    Update { plugin: Option<String> },
     /// Remove a managed plugin
-    Remove {
-        plugin: String,
-    },
+    Remove { plugin: String },
     /// Check the local zjpm setup
     Doctor,
 }

@@ -1,4 +1,5 @@
 use sha2::{Digest, Sha256};
+use wasmparser::{Chunk, FuncValidatorAllocations, Parser, ValidPayload, Validator};
 use std::env;
 use std::error::Error;
 use std::fmt;
@@ -172,7 +173,9 @@ impl ContentStore {
         match reader.read_exact(&mut magic) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
-                return Err(ContentStoreError::InvalidWasm);
+                return Err(invalid_wasm(
+                    "input ended before the WebAssembly magic header was complete",
+                ));
             }
             Err(error) => {
                 return Err(ContentStoreError::Io {
@@ -184,7 +187,7 @@ impl ContentStore {
         }
 
         if magic != WASM_MAGIC {
-            return Err(ContentStoreError::InvalidWasm);
+            return Err(invalid_wasm("bad WebAssembly magic header"));
         }
 
         let staging_dir = self.paths.staging_dir();
@@ -203,8 +206,10 @@ impl ContentStore {
 
         let mut cleanup = StagingCleanup::new(staging_path.clone());
         let mut hasher = Sha256::new();
+        let mut validator = StreamingWasmValidator::new();
         let mut bytes = 4_u64;
 
+        validator.push(&magic)?;
         hasher.update(magic);
         staging_file
             .write_all(&magic)
@@ -230,6 +235,7 @@ impl ContentStore {
                 }
             };
 
+            validator.push(&buffer[..read])?;
             hasher.update(&buffer[..read]);
             staging_file
                 .write_all(&buffer[..read])
@@ -240,6 +246,8 @@ impl ContentStore {
                 })?;
             bytes += read as u64;
         }
+
+        validator.finish()?;
 
         staging_file
             .flush()
@@ -394,6 +402,120 @@ impl ContentStore {
     }
 }
 
+struct StreamingWasmValidator {
+    parser: Parser,
+    validator: Validator,
+    allocations: FuncValidatorAllocations,
+    pending: Vec<u8>,
+    consumed: usize,
+    ended: bool,
+}
+
+impl StreamingWasmValidator {
+    fn new() -> Self {
+        Self {
+            parser: Parser::new(0),
+            validator: Validator::new(),
+            allocations: FuncValidatorAllocations::default(),
+            pending: Vec::with_capacity(COPY_BUFFER_SIZE),
+            consumed: 0,
+            ended: false,
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8]) -> Result<(), ContentStoreError> {
+        if self.ended {
+            return Err(invalid_wasm("trailing bytes after the end of the module"));
+        }
+
+        self.compact();
+        self.pending.extend_from_slice(bytes);
+        self.process(false)
+    }
+
+    fn finish(&mut self) -> Result<(), ContentStoreError> {
+        self.process(true)?;
+
+        if self.ended {
+            Ok(())
+        } else {
+            Err(invalid_wasm("unexpected end of WebAssembly module"))
+        }
+    }
+
+    fn process(&mut self, eof: bool) -> Result<(), ContentStoreError> {
+        loop {
+            if self.ended {
+                if self.consumed == self.pending.len() {
+                    return Ok(());
+                }
+                return Err(invalid_wasm("trailing bytes after the end of the module"));
+            }
+
+            let data = &self.pending[self.consumed..];
+            let chunk = self
+                .parser
+                .parse(data, eof)
+                .map_err(|error| invalid_wasm(error))?;
+
+            let Chunk::Parsed { consumed, payload } = chunk else {
+                if eof {
+                    return Err(invalid_wasm("unexpected end of WebAssembly module"));
+                }
+                return Ok(());
+            };
+
+            let validated = self
+                .validator
+                .payload(&payload)
+                .map_err(|error| invalid_wasm(error))?;
+
+            match validated {
+                ValidPayload::Func(function, body) => {
+                    let allocations = std::mem::take(&mut self.allocations);
+                    let mut validator = function.into_validator(allocations);
+                    validator
+                        .validate(&body)
+                        .map_err(|error| invalid_wasm(error))?;
+                    self.allocations = validator.into_allocations();
+                }
+                ValidPayload::End(_) => {
+                    self.ended = true;
+                }
+                ValidPayload::Parser(_) => {
+                    return Err(invalid_wasm(
+                        "WebAssembly components are not supported as Zellij plugins",
+                    ));
+                }
+                ValidPayload::Ok => {}
+            }
+
+            self.consumed += consumed;
+
+            if consumed == 0 && !self.ended {
+                return Err(invalid_wasm("WebAssembly parser made no progress"));
+            }
+        }
+    }
+
+    fn compact(&mut self) {
+        if self.consumed == 0 {
+            return;
+        }
+
+        let remaining = self.pending.len() - self.consumed;
+        self.pending.copy_within(self.consumed.., 0);
+        self.pending.truncate(remaining);
+        self.consumed = 0;
+    }
+}
+
+fn invalid_wasm(reason: impl fmt::Display) -> ContentStoreError {
+    ContentStoreError::InvalidWasm {
+        reason: reason.to_string(),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlobReceipt {
     pub sha256: String,
@@ -405,7 +527,9 @@ pub struct BlobReceipt {
 #[derive(Debug)]
 pub enum ContentStoreError {
     Store(StoreError),
-    InvalidWasm,
+    InvalidWasm {
+        reason: String,
+    },
     CorruptExistingBlob {
         path: PathBuf,
     },
@@ -420,7 +544,9 @@ impl fmt::Display for ContentStoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Store(error) => error.fmt(formatter),
-            Self::InvalidWasm => write!(formatter, "plugin is not a WebAssembly module"),
+            Self::InvalidWasm { reason } => {
+                write!(formatter, "plugin is not a valid WebAssembly module: {reason}")
+            }
             Self::CorruptExistingBlob { path } => write!(
                 formatter,
                 "content-addressed blob failed checksum verification: {}",
@@ -440,7 +566,7 @@ impl Error for ContentStoreError {
         match self {
             Self::Store(error) => Some(error),
             Self::Io { source, .. } => Some(source),
-            Self::InvalidWasm | Self::CorruptExistingBlob { .. } => None,
+            Self::InvalidWasm { .. } | Self::CorruptExistingBlob { .. } => None,
         }
     }
 }
@@ -586,7 +712,19 @@ mod tests {
     fn minimal_wasm(payload: &[u8]) -> Vec<u8> {
         let mut wasm = WASM_MAGIC.to_vec();
         wasm.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
-        wasm.extend_from_slice(payload);
+
+        if !payload.is_empty() {
+            let section_size = payload.len() + 2;
+            assert!(section_size < 128, "test helper only supports small payloads");
+            wasm.extend_from_slice(&[
+                0x00,
+                section_size as u8,
+                0x01,
+                b'z',
+            ]);
+            wasm.extend_from_slice(payload);
+        }
+
         wasm
     }
 
@@ -662,8 +800,41 @@ mod tests {
 
         let error = store.ingest_wasm(b"not wasm".as_slice()).unwrap_err();
 
-        assert!(matches!(error, ContentStoreError::InvalidWasm));
+        assert!(matches!(error, ContentStoreError::InvalidWasm { .. }));
         assert!(!store.paths().staging_dir().exists());
+    }
+
+    #[test]
+    fn rejects_truncated_wasm_after_a_valid_header() {
+        let (_root, store) = test_store();
+        let mut wasm = minimal_wasm(b"");
+        wasm.extend_from_slice(&[0x00, 0x05, 0x00]);
+
+        let error = store.ingest_wasm(wasm.as_slice()).unwrap_err();
+
+        assert!(matches!(error, ContentStoreError::InvalidWasm { .. }));
+        assert!(!store.paths().blobs_dir().exists());
+
+        let staging = store.paths().staging_dir();
+        if staging.exists() {
+            assert_eq!(fs::read_dir(staging).unwrap().count(), 0);
+        }
+    }
+
+    #[test]
+    fn rejects_an_invalid_function_body() {
+        let (_root, store) = test_store();
+        let wasm = [
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+            0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+            0x03, 0x02, 0x01, 0x00,
+            0x0a, 0x04, 0x01, 0x02, 0x00, 0xff,
+        ];
+
+        let error = store.ingest_wasm(wasm.as_slice()).unwrap_err();
+
+        assert!(matches!(error, ContentStoreError::InvalidWasm { .. }));
+        assert!(!store.paths().blobs_dir().exists());
     }
 
     #[test]

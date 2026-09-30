@@ -822,6 +822,22 @@ mod tests {
     }
 
     #[test]
+    fn accepts_a_valid_function_body() {
+        let (_root, store) = test_store();
+        let wasm = [
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+            0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+            0x03, 0x02, 0x01, 0x00,
+            0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b,
+        ];
+
+        let receipt = store.ingest_wasm(wasm.as_slice()).unwrap();
+
+        assert!(receipt.path.is_file());
+        assert!(store.verify_blob(&receipt.sha256).unwrap());
+    }
+
+    #[test]
     fn rejects_an_invalid_function_body() {
         let (_root, store) = test_store();
         let wasm = [

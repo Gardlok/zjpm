@@ -1,4 +1,5 @@
-use kdl::{KdlDocument, KdlNode};
+use crate::fsutil::write_atomic;
+use kdl::{KdlDocument, KdlEntry, KdlNode};
 use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
@@ -26,6 +27,44 @@ impl Manifest {
 
     pub fn plugins(&self) -> &[PluginSpec] {
         &self.plugins
+    }
+
+    pub fn upsert(&mut self, plugin: PluginSpec) {
+        if let Some(existing) = self
+            .plugins
+            .iter_mut()
+            .find(|existing| existing.name == plugin.name)
+        {
+            *existing = plugin;
+        } else {
+            self.plugins.push(plugin);
+        }
+    }
+
+    pub fn save_atomic(&self, path: &Path) -> Result<(), ManifestError> {
+        let mut document = KdlDocument::new();
+
+        for plugin in &self.plugins {
+            let mut node = KdlNode::new("plugin");
+            node.entries_mut().push(KdlEntry::new(plugin.name.clone()));
+
+            let children = node.ensure_children();
+            push_string_node(children, "source", plugin.source.to_string());
+
+            if let Some(version) = &plugin.version {
+                push_string_node(children, "version", version.clone());
+            }
+
+            document.nodes_mut().push(node);
+        }
+
+        document.autoformat();
+        write_atomic(path, document.to_string().as_bytes()).map_err(|source| {
+            ManifestError::Write {
+                path: path.to_path_buf(),
+                source,
+            }
+        })
     }
 }
 
@@ -128,6 +167,7 @@ impl FromStr for PluginSource {
 #[derive(Debug)]
 pub enum ManifestError {
     Read { path: PathBuf, source: io::Error },
+    Write { path: PathBuf, source: io::Error },
     Parse(kdl::KdlError),
     Schema(String),
 }
@@ -138,6 +178,9 @@ impl fmt::Display for ManifestError {
             Self::Read { path, source } => {
                 write!(formatter, "could not read {}: {source}", path.display())
             }
+            Self::Write { path, source } => {
+                write!(formatter, "could not write {}: {source}", path.display())
+            }
             Self::Parse(source) => write!(formatter, "could not parse manifest: {source}"),
             Self::Schema(message) => write!(formatter, "invalid manifest: {message}"),
         }
@@ -147,7 +190,7 @@ impl fmt::Display for ManifestError {
 impl Error for ManifestError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Read { source, .. } => Some(source),
+            Self::Read { source, .. } | Self::Write { source, .. } => Some(source),
             Self::Parse(source) => Some(source),
             Self::Schema(_) => None,
         }
@@ -213,6 +256,12 @@ fn parse_plugin(node: &KdlNode) -> Result<PluginSpec, ManifestError> {
         source,
         version,
     })
+}
+
+fn push_string_node(document: &mut KdlDocument, name: &str, value: String) {
+    let mut node = KdlNode::new(name);
+    node.entries_mut().push(KdlEntry::new(value));
+    document.nodes_mut().push(node);
 }
 
 fn positional_string<'a>(node: &'a KdlNode, label: &str) -> Result<&'a str, ManifestError> {
@@ -333,5 +382,40 @@ plugin "example" {
         .unwrap_err();
 
         assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn upsert_replaces_in_place_and_serializes_valid_kdl() {
+        let mut manifest: Manifest = r#"
+plugin "one" {
+    source "github:old/one"
+}
+plugin "two" {
+    source "github:two/two"
+}
+"#
+        .parse()
+        .unwrap();
+
+        manifest.upsert(PluginSpec {
+            name: "one".to_owned(),
+            source: PluginSource::Path("/tmp/a weird \"plugin\".wasm".to_owned()),
+            version: None,
+        });
+
+        let mut document = KdlDocument::new();
+        for plugin in manifest.plugins() {
+            let mut node = KdlNode::new("plugin");
+            node.entries_mut().push(KdlEntry::new(plugin.name.clone()));
+            let children = node.ensure_children();
+            push_string_node(children, "source", plugin.source.to_string());
+            document.nodes_mut().push(node);
+        }
+        document.autoformat();
+
+        let reparsed: Manifest = document.to_string().parse().unwrap();
+        assert_eq!(reparsed, manifest);
+        assert_eq!(reparsed.plugins()[0].name, "one");
+        assert_eq!(reparsed.plugins()[1].name, "two");
     }
 }

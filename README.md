@@ -8,6 +8,17 @@ The first version is focused on installing plugins from GitHub releases, listing
 
 It will not rewrite your Zellij config automatically at first.
 
+## Local install
+
+The first install path accepts a local WebAssembly plugin:
+
+```sh
+zjpm install ./my-plugin.wasm
+zjpm install ./plugin.wasm --name my-plugin
+```
+
+The name normally comes from the file name. A successful install validates the full WebAssembly module, stores its bytes by SHA-256, activates it without copying those bytes again, then records the source in `plugins.kdl` and the resolved checksum in `plugins.lock.kdl`.
+
 ## Manifest
 
 By default, zjpm reads `~/.config/zjpm/plugins.kdl`:
@@ -23,7 +34,7 @@ plugin "pinned-example" {
 }
 ```
 
-A local plugin can use a `path:` source as well.
+A local plugin uses a `path:` source.
 
 `ZJPM_CONFIG_DIR` and `ZJPM_DATA_DIR` can override the normal locations, which is handy for testing.
 

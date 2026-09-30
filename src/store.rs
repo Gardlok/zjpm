@@ -249,15 +249,14 @@ impl ContentStore {
                 source: error,
             })?;
 
-        let mut permissions =
-            staging_file
-                .metadata()
-                .map_err(|error| ContentStoreError::Io {
-                    operation: "read staging metadata",
-                    path: staging_path.clone(),
-                    source: error,
-                })?
-                .permissions();
+        let mut permissions = staging_file
+            .metadata()
+            .map_err(|error| ContentStoreError::Io {
+                operation: "read staging metadata",
+                path: staging_path.clone(),
+                source: error,
+            })?
+            .permissions();
         permissions.set_readonly(true);
         staging_file
             .set_permissions(permissions)
@@ -564,10 +563,8 @@ mod tests {
     impl TestDir {
         fn new() -> Self {
             let sequence = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-            let path = env::temp_dir().join(format!(
-                "zjpm-store-test-{}-{sequence}",
-                std::process::id()
-            ));
+            let path =
+                env::temp_dir().join(format!("zjpm-store-test-{}-{sequence}", std::process::id()));
             fs::create_dir_all(&path).unwrap();
             Self { path }
         }

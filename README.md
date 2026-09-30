@@ -29,9 +29,11 @@ A local plugin can use a `path:` source as well.
 
 ## Storage
 
-Plugin files will be stored by SHA-256 instead of copied into every version directory. Each managed plugin gets a stable `current.wasm` path that can later be switched atomically during updates or rollbacks.
+Plugin files are stored by SHA-256 instead of copied into every version directory. New plugin bytes are streamed through the hash while they are written to a staging file, then the finished file is synced and moved into place atomically.
 
-The checksum store is sharded by the first byte of the hash so it stays cheap to scan even if it grows large.
+If the same bytes are installed again, zjpm verifies and reuses the existing blob.
+
+Each managed plugin will get a stable `current.wasm` path that can later be switched during updates or rollbacks. The checksum store is sharded by the first byte of the hash so it stays cheap to scan even if it grows large.
 
 ## Try it
 

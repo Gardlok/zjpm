@@ -55,6 +55,10 @@ impl Manifest {
                 push_string_node(children, "version", version.clone());
             }
 
+            if let Some(asset) = &plugin.asset {
+                push_string_node(children, "asset", asset.clone());
+            }
+
             document.nodes_mut().push(node);
         }
 
@@ -104,6 +108,7 @@ pub struct PluginSpec {
     pub name: String,
     pub source: PluginSource,
     pub version: Option<String>,
+    pub asset: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,6 +212,7 @@ fn parse_plugin(node: &KdlNode) -> Result<PluginSpec, ManifestError> {
 
     let mut source = None;
     let mut version = None;
+    let mut asset = None;
 
     for child in children.nodes() {
         match child.name().value() {
@@ -238,6 +244,21 @@ fn parse_plugin(node: &KdlNode) -> Result<PluginSpec, ManifestError> {
                 }
                 version = Some(value.to_owned());
             }
+            "asset" => {
+                if asset.is_some() {
+                    return Err(ManifestError::Schema(format!(
+                        "plugin '{name}' has more than one asset"
+                    )));
+                }
+
+                let value = scalar_string(child, "asset")?;
+                if value.trim().is_empty() || !value.to_ascii_lowercase().ends_with(".wasm") {
+                    return Err(ManifestError::Schema(format!(
+                        "plugin '{name}' asset must name a .wasm file"
+                    )));
+                }
+                asset = Some(value.to_owned());
+            }
             other => {
                 return Err(ManifestError::Schema(format!(
                     "plugin '{name}' has unknown field '{other}'"
@@ -249,10 +270,17 @@ fn parse_plugin(node: &KdlNode) -> Result<PluginSpec, ManifestError> {
     let source = source
         .ok_or_else(|| ManifestError::Schema(format!("plugin '{name}' is missing a source")))?;
 
+    if asset.is_some() && matches!(source, PluginSource::Path(_)) {
+        return Err(ManifestError::Schema(format!(
+            "plugin '{name}' can only select an asset for a GitHub source"
+        )));
+    }
+
     Ok(PluginSpec {
         name,
         source,
         version,
+        asset,
     })
 }
 
@@ -321,6 +349,7 @@ plugin "local-clock" {
 plugin "pinned" {
     source "github:example/pinned"
     version "1.2.3"
+    asset "pinned.wasm"
 }
 "#
         .parse()
@@ -399,6 +428,7 @@ plugin "two" {
             name: "one".to_owned(),
             source: PluginSource::Path("/tmp/a weird \"plugin\".wasm".to_owned()),
             version: None,
+            asset: None,
         });
 
         let mut document = KdlDocument::new();

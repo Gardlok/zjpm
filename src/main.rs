@@ -67,7 +67,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         Command::Remove { plugin } => {
             println!("remove is not implemented yet: {plugin}");
         }
-        Command::Doctor => run_doctor()?
+        Command::Doctor => run_doctor()?,
     }
 
     Ok(())

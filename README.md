@@ -33,7 +33,9 @@ Plugin files are stored by SHA-256 instead of copied into every version director
 
 If the same bytes are installed again, zjpm verifies and reuses the existing blob.
 
-Each managed plugin will get a stable `current.wasm` path that can later be switched during updates or rollbacks. The checksum store is sharded by the first byte of the hash so it stays cheap to scan even if it grows large.
+Activation uses hard links rather than copying the WASM again. Version entries and the stable `current.wasm` path point at the same verified blob bytes, and `current.wasm` is replaced atomically when a different blob is activated.
+
+The checksum store is sharded by the first byte of the hash so it stays cheap to scan even if it grows large.
 
 ## Try it
 

@@ -102,6 +102,14 @@ impl StorePaths {
         self.plugin_dir(name).join("versions")
     }
 
+    pub fn version_blob_path(&self, name: &str, sha256: &str) -> Result<PathBuf, StoreError> {
+        self.blob_path(sha256)?;
+
+        Ok(self
+            .versions_dir(name)
+            .join(format!("{}.wasm", sha256.to_ascii_lowercase())))
+    }
+
     pub fn blob_path(&self, sha256: &str) -> Result<PathBuf, StoreError> {
         if sha256.len() != 64 || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(StoreError::InvalidSha256);

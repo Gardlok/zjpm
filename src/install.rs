@@ -25,11 +25,7 @@ impl Installer {
         &self.store
     }
 
-    pub fn install_path(
-        &self,
-        name: &str,
-        source: &Path,
-    ) -> Result<InstallReceipt, InstallError> {
+    pub fn install_path(&self, name: &str, source: &Path) -> Result<InstallReceipt, InstallError> {
         validate_plugin_name(name).map_err(InstallError::InvalidPluginName)?;
         let blob = self.store.ingest_wasm_path(source)?;
         self.finish_install(name, blob.sha256, blob.bytes, blob.reused)
@@ -186,19 +182,17 @@ fn replace_hard_link(source: &Path, target: &Path) -> Result<(), InstallError> {
         ));
 
         match fs::hard_link(source, &temporary) {
-            Ok(()) => {
-                match fs::rename(&temporary, target) {
-                    Ok(()) => return Ok(()),
-                    Err(source) => {
-                        let _ = fs::remove_file(&temporary);
-                        return Err(InstallError::Io {
-                            operation: "activate plugin",
-                            path: target.to_path_buf(),
-                            source,
-                        });
-                    }
+            Ok(()) => match fs::rename(&temporary, target) {
+                Ok(()) => return Ok(()),
+                Err(source) => {
+                    let _ = fs::remove_file(&temporary);
+                    return Err(InstallError::Io {
+                        operation: "activate plugin",
+                        path: target.to_path_buf(),
+                        source,
+                    });
                 }
-            }
+            },
             Err(source) if source.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(source) => {
                 return Err(InstallError::Io {
@@ -273,8 +267,7 @@ mod tests {
 
     fn tagged_wasm(tag: u8) -> Vec<u8> {
         vec![
-            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-            0x00, 0x03, 0x01, b'z', tag,
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x00, 0x03, 0x01, b'z', tag,
         ]
     }
 
@@ -283,9 +276,7 @@ mod tests {
         let (_root, installer) = test_installer();
         let wasm = tagged_wasm(1);
 
-        let receipt = installer
-            .install_reader("clock", wasm.as_slice())
-            .unwrap();
+        let receipt = installer.install_reader("clock", wasm.as_slice()).unwrap();
 
         assert!(receipt.version_path.is_file());
         assert!(receipt.current_path.is_file());
@@ -320,12 +311,8 @@ mod tests {
         let (_root, installer) = test_installer();
         let wasm = empty_wasm();
 
-        let first = installer
-            .install_reader("empty", wasm.as_slice())
-            .unwrap();
-        let second = installer
-            .install_reader("empty", wasm.as_slice())
-            .unwrap();
+        let first = installer.install_reader("empty", wasm.as_slice()).unwrap();
+        let second = installer.install_reader("empty", wasm.as_slice()).unwrap();
 
         assert!(!first.blob_reused);
         assert!(second.blob_reused);

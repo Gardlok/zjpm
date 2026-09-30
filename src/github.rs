@@ -3,14 +3,16 @@ use serde::Deserialize;
 use std::env;
 use std::error::Error;
 use std::fmt;
+use std::io::{self, Read};
 use std::str::FromStr;
-use std::time::Duration;
-use ureq::Agent;
 
 const API_BASE: &str = "https://api.github.com";
 const API_VERSION: &str = "2026-03-10";
 const RELEASE_METADATA_LIMIT: u64 = 4 * 1024 * 1024;
 const MAX_PLUGIN_ASSET_BYTES: u64 = 128 * 1024 * 1024;
+const REQUEST_TIMEOUT_SECONDS: u64 = 300;
+const MAX_HEADERS_BYTES: usize = 64 * 1024;
+const MAX_STATUS_LINE_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitHubRepository {
@@ -58,27 +60,17 @@ impl FromStr for GitHubRepository {
 
 #[derive(Debug, Clone)]
 pub struct GitHubClient {
-    agent: Agent,
     token: Option<String>,
 }
 
 impl GitHubClient {
     pub fn from_env() -> Self {
-        let config = Agent::config_builder()
-            .https_only(true)
-            .timeout_global(Some(Duration::from_secs(300)))
-            .user_agent(concat!("zjpm/", env!("CARGO_PKG_VERSION")))
-            .build();
-
         let token = env::var("GITHUB_TOKEN")
             .ok()
             .map(|token| token.trim().to_owned())
             .filter(|token| !token.is_empty());
 
-        Self {
-            agent: config.into(),
-            token,
-        }
+        Self { token }
     }
 
     pub fn install_latest(
@@ -104,13 +96,8 @@ impl GitHubClient {
             });
         }
 
-        let mut response = self.call(&asset.url, "application/octet-stream")?;
-        let reader = response
-            .body_mut()
-            .with_config()
-            .limit(asset.size.saturating_add(1))
-            .reader();
-
+        let response = self.download_asset(&asset.url)?;
+        let reader = response.take(asset.size.saturating_add(1));
         let blob = installer.store().ingest_wasm(reader)?;
 
         if blob.bytes != asset.size {
@@ -148,38 +135,87 @@ impl GitHubClient {
             "{API_BASE}/repos/{}/{}/releases/latest",
             repository.owner, repository.repo
         );
-        let mut response = self.call(&url, "application/vnd.github+json")?;
+        let mut response = self.github_get(&url, "application/vnd.github+json", false)?;
 
+        ensure_status(&response, 200)?;
+
+        let mut body = Vec::new();
         response
-            .body_mut()
-            .with_config()
-            .limit(RELEASE_METADATA_LIMIT)
-            .read_json()
-            .map_err(|source| GitHubError::Http {
+            .by_ref()
+            .take(RELEASE_METADATA_LIMIT + 1)
+            .read_to_end(&mut body)
+            .map_err(|source| GitHubError::Read {
                 operation: "read latest release metadata",
                 source,
-            })
+            })?;
+
+        if body.len() as u64 > RELEASE_METADATA_LIMIT {
+            return Err(GitHubError::MetadataTooLarge {
+                limit: RELEASE_METADATA_LIMIT,
+            });
+        }
+
+        serde_json::from_slice(&body).map_err(GitHubError::Json)
     }
 
-    fn call(
+    fn download_asset(&self, url: &str) -> Result<minreq::ResponseLazy, GitHubError> {
+        let response = self.github_get(url, "application/octet-stream", false)?;
+
+        match response.status_code {
+            200 => Ok(response),
+            301 | 302 | 303 | 307 | 308 => {
+                let location = response_header(&response, "Location")
+                    .ok_or(GitHubError::RedirectMissingLocation)?
+                    .to_owned();
+
+                if !location.starts_with("https://") {
+                    return Err(GitHubError::UnsafeRedirect(location));
+                }
+
+                let response = minreq::get(location)
+                    .with_header("Accept", "application/octet-stream")
+                    .with_header("User-Agent", user_agent())
+                    .with_timeout(REQUEST_TIMEOUT_SECONDS)
+                    .with_max_redirects(5)
+                    .with_max_headers_size(MAX_HEADERS_BYTES)
+                    .with_max_status_line_length(MAX_STATUS_LINE_BYTES)
+                    .send_lazy()
+                    .map_err(|source| GitHubError::Http {
+                        operation: "download GitHub asset",
+                        source,
+                    })?;
+
+                ensure_status(&response, 200)?;
+                Ok(response)
+            }
+            _ => Err(status_error(&response)),
+        }
+    }
+
+    fn github_get(
         &self,
         url: &str,
         accept: &'static str,
-    ) -> Result<ureq::http::Response<ureq::Body>, GitHubError> {
-        let request = self
-            .agent
-            .get(url)
-            .header("Accept", accept)
-            .header("X-GitHub-Api-Version", API_VERSION);
+        follow_redirects: bool,
+    ) -> Result<minreq::ResponseLazy, GitHubError> {
+        let request = minreq::get(url)
+            .with_header("Accept", accept)
+            .with_header("User-Agent", user_agent())
+            .with_header("X-GitHub-Api-Version", API_VERSION)
+            .with_timeout(REQUEST_TIMEOUT_SECONDS)
+            .with_follow_redirects(follow_redirects)
+            .with_max_redirects(5)
+            .with_max_headers_size(MAX_HEADERS_BYTES)
+            .with_max_status_line_length(MAX_STATUS_LINE_BYTES);
 
-        let result = match self.token.as_deref() {
+        let response = match self.token.as_deref() {
             Some(token) => request
-                .header("Authorization", format!("Bearer {token}"))
-                .call(),
-            None => request.call(),
+                .with_header("Authorization", format!("Bearer {token}"))
+                .send_lazy(),
+            None => request.send_lazy(),
         };
 
-        result.map_err(|source| GitHubError::Http {
+        response.map_err(|source| GitHubError::Http {
             operation: "request GitHub",
             source,
         })
@@ -224,10 +260,25 @@ pub enum GitHubError {
         expected: String,
         actual: String,
     },
+    MetadataTooLarge {
+        limit: u64,
+    },
+    RedirectMissingLocation,
+    UnsafeRedirect(String),
+    HttpStatus {
+        status: u16,
+        reason: String,
+        url: String,
+    },
     Http {
         operation: &'static str,
-        source: ureq::Error,
+        source: minreq::Error,
     },
+    Read {
+        operation: &'static str,
+        source: io::Error,
+    },
+    Json(serde_json::Error),
     Install(InstallError),
     Store(crate::ContentStoreError),
 }
@@ -285,7 +336,24 @@ impl fmt::Display for GitHubError {
                 formatter,
                 "GitHub asset '{name}' SHA-256 mismatch: expected {expected}, received {actual}"
             ),
+            Self::MetadataTooLarge { limit } => write!(
+                formatter,
+                "GitHub release metadata exceeded the {limit}-byte safety limit"
+            ),
+            Self::RedirectMissingLocation => {
+                write!(formatter, "GitHub asset redirect did not include a Location header")
+            }
+            Self::UnsafeRedirect(url) => {
+                write!(formatter, "GitHub asset redirect was not HTTPS: {url}")
+            }
+            Self::HttpStatus {
+                status,
+                reason,
+                url,
+            } => write!(formatter, "GitHub request returned HTTP {status} {reason}: {url}"),
             Self::Http { operation, source } => write!(formatter, "{operation}: {source}"),
+            Self::Read { operation, source } => write!(formatter, "{operation}: {source}"),
+            Self::Json(source) => write!(formatter, "parse GitHub release metadata: {source}"),
             Self::Install(source) => source.fmt(formatter),
             Self::Store(source) => source.fmt(formatter),
         }
@@ -296,6 +364,8 @@ impl Error for GitHubError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Http { source, .. } => Some(source),
+            Self::Read { source, .. } => Some(source),
+            Self::Json(source) => Some(source),
             Self::Install(source) => Some(source),
             Self::Store(source) => Some(source),
             _ => None,
@@ -399,6 +469,34 @@ fn parse_sha256_digest(digest: Option<&str>) -> Result<Option<String>, GitHubErr
     }
 
     Ok(Some(value.to_ascii_lowercase()))
+}
+
+fn response_header<'a>(response: &'a minreq::ResponseLazy, name: &str) -> Option<&'a str> {
+    response
+        .headers
+        .iter()
+        .find(|(header, _)| header.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
+fn ensure_status(response: &minreq::ResponseLazy, expected: u16) -> Result<(), GitHubError> {
+    if response.status_code == expected {
+        Ok(())
+    } else {
+        Err(status_error(response))
+    }
+}
+
+fn status_error(response: &minreq::ResponseLazy) -> GitHubError {
+    GitHubError::HttpStatus {
+        status: response.status_code,
+        reason: response.reason_phrase.clone(),
+        url: response.url.clone(),
+    }
+}
+
+fn user_agent() -> &'static str {
+    concat!("zjpm/", env!("CARGO_PKG_VERSION"))
 }
 
 fn valid_repository_component(value: &str) -> bool {

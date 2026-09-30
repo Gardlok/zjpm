@@ -168,7 +168,7 @@ fn list_plugins() -> Result<(), Box<dyn Error>> {
 }
 
 fn display_version(plugin: &PluginSpec) -> &str {
-    plugin.version.as_deref().unwrap_or(match plugin.source {
+    plugin.version.as_deref().unwrap_or(match &plugin.source {
         PluginSource::Path(_) => "local",
         PluginSource::GitHub { .. } => "latest",
     })

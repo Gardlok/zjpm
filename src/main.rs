@@ -3,9 +3,7 @@ use std::error::Error;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use zjpm::{
-    Installer, LockedPlugin, Lockfile, Manifest, PluginSource, PluginSpec, StorePaths,
-};
+use zjpm::{Installer, LockedPlugin, Lockfile, Manifest, PluginSource, PluginSpec, StorePaths};
 
 #[derive(Parser)]
 #[command(name = "zjpm", version, about = "A package manager for Zellij plugins")]
@@ -87,7 +85,9 @@ fn install_local(source: &Path, requested_name: Option<&str>) -> Result<(), Box<
     let asset = source
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "plugin file name is not UTF-8"))?
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "plugin file name is not UTF-8")
+        })?
         .to_owned();
 
     let paths = StorePaths::discover()?;

@@ -79,10 +79,7 @@ mod tests {
 
         assert_eq!(fs::read(&path).unwrap(), b"second\n");
         assert_eq!(
-            fs::read_dir(&root)
-                .unwrap()
-                .filter_map(Result::ok)
-                .count(),
+            fs::read_dir(&root).unwrap().filter_map(Result::ok).count(),
             1
         );
 

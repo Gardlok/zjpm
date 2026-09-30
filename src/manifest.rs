@@ -59,11 +59,9 @@ impl Manifest {
         }
 
         document.autoformat();
-        write_atomic(path, document.to_string().as_bytes()).map_err(|source| {
-            ManifestError::Write {
-                path: path.to_path_buf(),
-                source,
-            }
+        write_atomic(path, document.to_string().as_bytes()).map_err(|source| ManifestError::Write {
+            path: path.to_path_buf(),
+            source,
         })
     }
 }

@@ -1,5 +1,5 @@
 use crate::fsutil::write_atomic;
-use crate::manifest::{validate_plugin_name, PluginSource};
+use crate::manifest::{PluginSource, validate_plugin_name};
 use kdl::{KdlDocument, KdlEntry, KdlNode};
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -64,11 +64,9 @@ impl Lockfile {
         }
 
         document.autoformat();
-        write_atomic(path, document.to_string().as_bytes()).map_err(|source| {
-            LockfileError::Write {
-                path: path.to_path_buf(),
-                source,
-            }
+        write_atomic(path, document.to_string().as_bytes()).map_err(|source| LockfileError::Write {
+            path: path.to_path_buf(),
+            source,
         })
     }
 }
@@ -167,11 +165,9 @@ fn parse_locked_plugin(node: &KdlNode) -> Result<LockedPlugin, LockfileError> {
             "source" => {
                 set_once(&mut source, "source", &name)?;
                 let value = scalar_string(child, "source")?;
-                source = Some(
-                    value
-                        .parse()
-                        .map_err(|error: String| LockfileError::Schema(format!("plugin '{name}': {error}")))?,
-                );
+                source = Some(value.parse().map_err(|error: String| {
+                    LockfileError::Schema(format!("plugin '{name}': {error}"))
+                })?);
             }
             "version" => {
                 set_once(&mut version, "version", &name)?;
@@ -273,9 +269,7 @@ fn scalar_string<'a>(node: &'a KdlNode, label: &str) -> Result<&'a str, Lockfile
 }
 
 fn scalar_integer(node: &KdlNode, label: &str) -> Result<i128, LockfileError> {
-    if node.children().is_some()
-        || node.entries().len() != 1
-        || node.entries()[0].name().is_some()
+    if node.children().is_some() || node.entries().len() != 1 || node.entries()[0].name().is_some()
     {
         return Err(LockfileError::Schema(format!(
             "{label} must be one integer"

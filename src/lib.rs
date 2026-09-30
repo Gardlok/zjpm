@@ -6,7 +6,9 @@ pub mod lockfile;
 pub mod manifest;
 pub mod store;
 
-pub use github::{GitHubClient, GitHubError, GitHubInstallReceipt, GitHubRepository};
+pub use github::{
+    GitHubClient, GitHubError, GitHubInstallReceipt, GitHubRepository, GitHubResolvedRelease,
+};
 pub use install::{InstallError, InstallReceipt, Installer};
 pub use lockfile::{LockedPlugin, Lockfile, LockfileError};
 pub use manifest::{Manifest, ManifestError, PluginSource, PluginSpec};

@@ -58,6 +58,12 @@ History is resolved state, not user intent, so rollback changes the active bytes
 
 Older installs created before history support can still show their current lock state, but zjpm will not guess metadata for old digest files. Rollback only uses states it has recorded explicitly.
 
+## Doctor
+
+`zjpm doctor` performs a read-only integrity audit of managed state. It checks manifest/lock relationships, explicit asset and version intent, locked blob/version/current checksums, recorded history, and—on Unix—the hard-link relationship that makes activation zero-copy.
+
+Doctor does not repair anything in this first version. Integrity errors return a non-zero exit status; noncanonical but byte-correct hard-link layout is reported as a warning.
+
 ## Manifest
 
 By default, zjpm reads `~/.config/zjpm/plugins.kdl`:

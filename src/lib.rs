@@ -1,5 +1,6 @@
 mod fsutil;
 
+pub mod doctor;
 pub mod github;
 pub mod history;
 pub mod install;
@@ -7,6 +8,7 @@ pub mod lockfile;
 pub mod manifest;
 pub mod store;
 
+pub use doctor::{Doctor, DoctorError, DoctorIssue, DoctorReport, DoctorSeverity};
 pub use github::{
     GitHubClient, GitHubError, GitHubInstallReceipt, GitHubRepository, GitHubResolvedRelease,
 };

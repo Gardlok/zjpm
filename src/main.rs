@@ -4,8 +4,8 @@ use std::io;
 use std::path::Path;
 
 use zjpm::{
-    GitHubClient, GitHubRepository, InstallError, Installer, LockedPlugin, Lockfile, Manifest,
-    PluginHistory, PluginSource, PluginSpec, StorePaths,
+    Doctor, GitHubClient, GitHubRepository, InstallError, Installer, LockedPlugin, Lockfile,
+    Manifest, PluginHistory, PluginSource, PluginSpec, StorePaths,
 };
 
 #[derive(Parser)]
@@ -67,9 +67,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         Command::Remove { plugin } => {
             println!("remove is not implemented yet: {plugin}");
         }
-        Command::Doctor => {
-            println!("doctor is not implemented yet");
-        }
+        Command::Doctor => run_doctor()?
     }
 
     Ok(())
@@ -448,6 +446,48 @@ fn rollback_plugin(name: &str) -> Result<(), Box<dyn Error>> {
     println!("  asset: {}", target.asset);
     println!("  sha256: {}", target.sha256);
     println!("  current: {}", current_path.display());
+
+    Ok(())
+}
+
+fn run_doctor() -> Result<(), Box<dyn Error>> {
+    let paths = StorePaths::discover()?;
+    let report = Doctor::new(paths).audit()?;
+
+    if report.is_healthy() {
+        println!(
+            "zjpm doctor: healthy ({} managed plugin{})",
+            report.checked_plugins(),
+            if report.checked_plugins() == 1 { "" } else { "s" }
+        );
+        return Ok(());
+    }
+
+    for issue in report.issues() {
+        let plugin = issue
+            .plugin
+            .as_deref()
+            .map(|plugin| format!(" [{plugin}]"))
+            .unwrap_or_default();
+
+        println!(
+            "{} {}{}: {}",
+            issue.severity.label(),
+            issue.code,
+            plugin,
+            issue.message
+        );
+    }
+
+    println!(
+        "zjpm doctor: {} error(s), {} warning(s)",
+        report.error_count(),
+        report.warning_count()
+    );
+
+    if report.error_count() > 0 {
+        return Err(io::Error::other("doctor found integrity errors").into());
+    }
 
     Ok(())
 }

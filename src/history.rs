@@ -1,6 +1,6 @@
 use crate::fsutil::write_atomic;
 use crate::manifest::{PluginSource, validate_plugin_name};
-use crate::LockedPlugin;
+use crate::lockfile::LockedPlugin;
 use kdl::{KdlDocument, KdlEntry, KdlNode};
 use std::error::Error;
 use std::fmt;

@@ -1,4 +1,4 @@
-use crate::{InstallError, InstallReceipt, Installer};
+use crate::{InstallError, InstallReceipt, Installer, LockedPlugin};
 use serde::Deserialize;
 use std::env;
 use std::error::Error;
@@ -73,13 +73,11 @@ impl GitHubClient {
         Self { token }
     }
 
-    pub fn install_latest(
+    pub fn resolve_latest(
         &self,
         repository: &GitHubRepository,
-        installer: &Installer,
-        name: &str,
         requested_asset: Option<&str>,
-    ) -> Result<GitHubInstallReceipt, GitHubError> {
+    ) -> Result<GitHubResolvedRelease, GitHubError> {
         let release = self.latest_release(repository)?;
         let conventional_asset = format!("{}.wasm", repository.repo());
         let asset =
@@ -93,24 +91,50 @@ impl GitHubClient {
             });
         }
 
-        let response = self.download_asset(&asset.url)?;
-        let reader = response.take(asset.size.saturating_add(1));
+        Ok(GitHubResolvedRelease {
+            tag_name: release.tag_name,
+            asset_name: asset.name,
+            asset_size: asset.size,
+            sha256: parse_sha256_digest(asset.digest.as_deref())?,
+            asset_url: asset.url,
+        })
+    }
+
+    pub fn install_latest(
+        &self,
+        repository: &GitHubRepository,
+        installer: &Installer,
+        name: &str,
+        requested_asset: Option<&str>,
+    ) -> Result<GitHubInstallReceipt, GitHubError> {
+        let resolved = self.resolve_latest(repository, requested_asset)?;
+        self.install_resolved(&resolved, installer, name)
+    }
+
+    pub fn install_resolved(
+        &self,
+        resolved: &GitHubResolvedRelease,
+        installer: &Installer,
+        name: &str,
+    ) -> Result<GitHubInstallReceipt, GitHubError> {
+        let response = self.download_asset(&resolved.asset_url)?;
+        let reader = response.take(resolved.asset_size.saturating_add(1));
         let blob = installer.store().ingest_wasm(reader)?;
 
-        if blob.bytes != asset.size {
+        if blob.bytes != resolved.asset_size {
             return Err(GitHubError::AssetSizeMismatch {
-                name: asset.name.clone(),
-                expected: asset.size,
+                name: resolved.asset_name.clone(),
+                expected: resolved.asset_size,
                 actual: blob.bytes,
             });
         }
 
-        if let Some(expected) = parse_sha256_digest(asset.digest.as_deref())?
+        if let Some(expected) = resolved.sha256.as_deref()
             && blob.sha256 != expected
         {
             return Err(GitHubError::AssetDigestMismatch {
-                name: asset.name.clone(),
-                expected,
+                name: resolved.asset_name.clone(),
+                expected: expected.to_owned(),
                 actual: blob.sha256,
             });
         }
@@ -118,8 +142,8 @@ impl GitHubClient {
         let receipt = installer.activate_ingested(name, blob)?;
 
         Ok(GitHubInstallReceipt {
-            tag_name: release.tag_name,
-            asset_name: asset.name,
+            tag_name: resolved.tag_name.clone(),
+            asset_name: resolved.asset_name.clone(),
             receipt,
         })
     }
@@ -215,6 +239,26 @@ impl GitHubClient {
         response.map_err(|source| GitHubError::Http {
             operation: "request GitHub",
             source,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitHubResolvedRelease {
+    pub tag_name: String,
+    pub asset_name: String,
+    pub asset_size: u64,
+    pub sha256: Option<String>,
+    asset_url: String,
+}
+
+impl GitHubResolvedRelease {
+    pub fn matches_locked(&self, locked: &LockedPlugin) -> bool {
+        self.sha256.as_deref().is_some_and(|sha256| {
+            locked.version.as_deref() == Some(self.tag_name.as_str())
+                && locked.asset == self.asset_name
+                && locked.bytes == self.asset_size
+                && locked.sha256 == sha256
         })
     }
 }
@@ -604,6 +648,40 @@ mod tests {
             select_wasm_asset(&release, Some("zjframes.wasm"), Some("zjstatus.wasm")).unwrap();
 
         assert_eq!(selected.name, "zjframes.wasm");
+    }
+
+    #[test]
+    fn resolved_release_matches_lock_only_with_exact_digest_state() {
+        let resolved = GitHubResolvedRelease {
+            tag_name: "v1.2.3".to_owned(),
+            asset_name: "plugin.wasm".to_owned(),
+            asset_size: 42,
+            sha256: Some("a".repeat(64)),
+            asset_url: "https://api.github.com/assets/1".to_owned(),
+        };
+        let locked = LockedPlugin {
+            name: "plugin".to_owned(),
+            source: crate::PluginSource::GitHub {
+                owner: "owner".to_owned(),
+                repo: "plugin".to_owned(),
+            },
+            version: Some("v1.2.3".to_owned()),
+            asset: "plugin.wasm".to_owned(),
+            sha256: "a".repeat(64),
+            bytes: 42,
+        };
+
+        assert!(resolved.matches_locked(&locked));
+
+        let mut changed = locked.clone();
+        changed.sha256 = "b".repeat(64);
+        assert!(!resolved.matches_locked(&changed));
+
+        let unresolved_digest = GitHubResolvedRelease {
+            sha256: None,
+            ..resolved
+        };
+        assert!(!unresolved_digest.matches_locked(&locked));
     }
 
     #[test]

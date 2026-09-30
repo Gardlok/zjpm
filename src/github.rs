@@ -86,9 +86,15 @@ impl GitHubClient {
         repository: &GitHubRepository,
         installer: &Installer,
         name: &str,
+        requested_asset: Option<&str>,
     ) -> Result<GitHubInstallReceipt, GitHubError> {
         let release = self.latest_release(repository)?;
-        let asset = select_wasm_asset(&release)?;
+        let conventional_asset = format!("{}.wasm", repository.repo());
+        let asset = select_wasm_asset(
+            &release,
+            requested_asset,
+            Some(conventional_asset.as_str()),
+        )?;
 
         if asset.size > MAX_PLUGIN_ASSET_BYTES {
             return Err(GitHubError::AssetTooLarge {
@@ -193,6 +199,11 @@ pub enum GitHubError {
     NoWasmAsset {
         repository_release: String,
     },
+    AssetNotFound {
+        repository_release: String,
+        requested: String,
+        names: Vec<String>,
+    },
     MultipleWasmAssets {
         repository_release: String,
         names: Vec<String>,
@@ -234,12 +245,21 @@ impl fmt::Display for GitHubError {
                 formatter,
                 "GitHub release {repository_release} has no uploaded .wasm asset"
             ),
+            Self::AssetNotFound {
+                repository_release,
+                requested,
+                names,
+            } => write!(
+                formatter,
+                "GitHub release {repository_release} has no uploaded .wasm asset named '{requested}'; available: {}",
+                names.join(", ")
+            ),
             Self::MultipleWasmAssets {
                 repository_release,
                 names,
             } => write!(
                 formatter,
-                "GitHub release {repository_release} has multiple .wasm assets: {}",
+                "GitHub release {repository_release} has multiple .wasm assets: {}; use --asset to choose",
                 names.join(", ")
             ),
             Self::AssetTooLarge { name, bytes, limit } => write!(
@@ -310,7 +330,11 @@ struct ReleaseAsset {
     digest: Option<String>,
 }
 
-fn select_wasm_asset(release: &ReleaseResponse) -> Result<ReleaseAsset, GitHubError> {
+fn select_wasm_asset(
+    release: &ReleaseResponse,
+    requested: Option<&str>,
+    conventional: Option<&str>,
+) -> Result<ReleaseAsset, GitHubError> {
     let mut assets: Vec<_> = release
         .assets
         .iter()
@@ -321,16 +345,44 @@ fn select_wasm_asset(release: &ReleaseResponse) -> Result<ReleaseAsset, GitHubEr
 
     assets.sort_by(|left, right| left.name.cmp(&right.name));
 
-    match assets.len() {
-        0 => Err(GitHubError::NoWasmAsset {
+    if assets.is_empty() {
+        return Err(GitHubError::NoWasmAsset {
             repository_release: release.tag_name.clone(),
-        }),
-        1 => Ok(assets.remove(0)),
-        _ => Err(GitHubError::MultipleWasmAssets {
-            repository_release: release.tag_name.clone(),
-            names: assets.into_iter().map(|asset| asset.name).collect(),
-        }),
+        });
     }
+
+    if let Some(requested) = requested {
+        return assets
+            .iter()
+            .find(|asset| asset.name == requested)
+            .cloned()
+            .ok_or_else(|| GitHubError::AssetNotFound {
+                repository_release: release.tag_name.clone(),
+                requested: requested.to_owned(),
+                names: assets.iter().map(|asset| asset.name.clone()).collect(),
+            });
+    }
+
+    if assets.len() == 1 {
+        return Ok(assets.remove(0));
+    }
+
+    if let Some(conventional) = conventional {
+        let matching: Vec<_> = assets
+            .iter()
+            .filter(|asset| asset.name.eq_ignore_ascii_case(conventional))
+            .cloned()
+            .collect();
+
+        if matching.len() == 1 {
+            return Ok(matching.into_iter().next().expect("one matching asset"));
+        }
+    }
+
+    Err(GitHubError::MultipleWasmAssets {
+        repository_release: release.tag_name.clone(),
+        names: assets.into_iter().map(|asset| asset.name).collect(),
+    })
 }
 
 fn parse_sha256_digest(digest: Option<&str>) -> Result<Option<String>, GitHubError> {
@@ -399,7 +451,7 @@ mod tests {
             ],
         };
 
-        let selected = select_wasm_asset(&release).unwrap();
+        let selected = select_wasm_asset(&release, None, None).unwrap();
 
         assert_eq!(selected.name, "plugin.wasm");
     }
@@ -414,7 +466,7 @@ mod tests {
             ],
         };
 
-        let error = select_wasm_asset(&release).unwrap_err();
+        let error = select_wasm_asset(&release, None, None).unwrap_err();
 
         match error {
             GitHubError::MultipleWasmAssets { names, .. } => {
@@ -422,6 +474,42 @@ mod tests {
             }
             other => panic!("unexpected error: {other}"),
         }
+    }
+
+    #[test]
+    fn prefers_the_repository_named_wasm_when_release_has_multiple() {
+        let release = ReleaseResponse {
+            tag_name: "v1.2.3".to_owned(),
+            assets: vec![
+                asset("zjframes.wasm", "uploaded"),
+                asset("zjstatus.wasm", "uploaded"),
+            ],
+        };
+
+        let selected =
+            select_wasm_asset(&release, None, Some("zjstatus.wasm")).unwrap();
+
+        assert_eq!(selected.name, "zjstatus.wasm");
+    }
+
+    #[test]
+    fn explicit_asset_overrides_conventional_name() {
+        let release = ReleaseResponse {
+            tag_name: "v1.2.3".to_owned(),
+            assets: vec![
+                asset("zjframes.wasm", "uploaded"),
+                asset("zjstatus.wasm", "uploaded"),
+            ],
+        };
+
+        let selected = select_wasm_asset(
+            &release,
+            Some("zjframes.wasm"),
+            Some("zjstatus.wasm"),
+        )
+        .unwrap();
+
+        assert_eq!(selected.name, "zjframes.wasm");
     }
 
     #[test]

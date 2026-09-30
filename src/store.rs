@@ -102,6 +102,10 @@ impl StorePaths {
         self.plugin_dir(name).join("versions")
     }
 
+    pub fn history_path(&self, name: &str) -> PathBuf {
+        self.plugin_dir(name).join("history.kdl")
+    }
+
     pub fn version_blob_path(&self, name: &str, sha256: &str) -> Result<PathBuf, StoreError> {
         self.blob_path(sha256)?;
 

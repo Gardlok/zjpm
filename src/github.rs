@@ -121,14 +121,14 @@ impl GitHubClient {
             });
         }
 
-        if let Some(expected) = parse_sha256_digest(asset.digest.as_deref())? {
-            if blob.sha256 != expected {
-                return Err(GitHubError::AssetDigestMismatch {
-                    name: asset.name.clone(),
-                    expected,
-                    actual: blob.sha256,
-                });
-            }
+        if let Some(expected) = parse_sha256_digest(asset.digest.as_deref())?
+            && blob.sha256 != expected
+        {
+            return Err(GitHubError::AssetDigestMismatch {
+                name: asset.name.clone(),
+                expected,
+                actual: blob.sha256,
+            });
         }
 
         let receipt = installer.activate_ingested(name, blob)?;

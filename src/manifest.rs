@@ -156,7 +156,7 @@ impl Error for ManifestError {
 
 fn parse_plugin(node: &KdlNode) -> Result<PluginSpec, ManifestError> {
     let name = positional_string(node, "plugin name")?.to_owned();
-    validate_plugin_name(&name)?;
+    validate_plugin_name(&name).map_err(ManifestError::Schema)?;
 
     let children = node.children().ok_or_else(|| {
         ManifestError::Schema(format!(
@@ -238,20 +238,18 @@ fn scalar_string<'a>(node: &'a KdlNode, label: &str) -> Result<&'a str, Manifest
     positional_string(node, label)
 }
 
-fn validate_plugin_name(name: &str) -> Result<(), ManifestError> {
+pub(crate) fn validate_plugin_name(name: &str) -> Result<(), String> {
     if name.is_empty() || name == "." || name == ".." {
-        return Err(ManifestError::Schema(format!(
-            "invalid plugin name '{name}'"
-        )));
+        return Err(format!("invalid plugin name '{name}'"));
     }
 
     if !name
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
     {
-        return Err(ManifestError::Schema(format!(
+        return Err(format!(
             "plugin name '{name}' may only contain letters, numbers, '.', '_' and '-'"
-        )));
+        ));
     }
 
     Ok(())

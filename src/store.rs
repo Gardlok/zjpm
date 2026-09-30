@@ -322,7 +322,7 @@ impl ContentStore {
                     reused: false,
                 })
             }
-            Err(error) if fs::symlink_metadata(&blob_path).is_ok() => {
+            Err(_) if fs::symlink_metadata(&blob_path).is_ok() => {
                 if self.verify_blob(&sha256)? {
                     Ok(BlobReceipt {
                         sha256,
@@ -349,7 +349,7 @@ impl ContentStore {
             .blob_path(&expected)
             .map_err(ContentStoreError::Store)?;
 
-        let metadata = match fs::metadata(&path) {
+        let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
             Err(error) => {
@@ -361,7 +361,7 @@ impl ContentStore {
             }
         };
 
-        if !metadata.is_file() {
+        if !metadata.file_type().is_file() {
             return Ok(false);
         }
 

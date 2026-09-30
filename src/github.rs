@@ -82,11 +82,8 @@ impl GitHubClient {
     ) -> Result<GitHubInstallReceipt, GitHubError> {
         let release = self.latest_release(repository)?;
         let conventional_asset = format!("{}.wasm", repository.repo());
-        let asset = select_wasm_asset(
-            &release,
-            requested_asset,
-            Some(conventional_asset.as_str()),
-        )?;
+        let asset =
+            select_wasm_asset(&release, requested_asset, Some(conventional_asset.as_str()))?;
 
         if asset.size > MAX_PLUGIN_ASSET_BYTES {
             return Err(GitHubError::AssetTooLarge {
@@ -290,9 +287,7 @@ impl fmt::Display for GitHubError {
                 formatter,
                 "invalid GitHub repository '{value}'; expected owner/repo"
             ),
-            Self::NoWasmAsset {
-                repository_release,
-            } => write!(
+            Self::NoWasmAsset { repository_release } => write!(
                 formatter,
                 "GitHub release {repository_release} has no uploaded .wasm asset"
             ),
@@ -318,7 +313,10 @@ impl fmt::Display for GitHubError {
                 "GitHub asset '{name}' is {bytes} bytes; zjpm currently limits plugins to {limit} bytes"
             ),
             Self::InvalidAssetDigest(value) => {
-                write!(formatter, "GitHub returned an invalid asset digest '{value}'")
+                write!(
+                    formatter,
+                    "GitHub returned an invalid asset digest '{value}'"
+                )
             }
             Self::AssetSizeMismatch {
                 name,
@@ -341,7 +339,10 @@ impl fmt::Display for GitHubError {
                 "GitHub release metadata exceeded the {limit}-byte safety limit"
             ),
             Self::RedirectMissingLocation => {
-                write!(formatter, "GitHub asset redirect did not include a Location header")
+                write!(
+                    formatter,
+                    "GitHub asset redirect did not include a Location header"
+                )
             }
             Self::UnsafeRedirect(url) => {
                 write!(formatter, "GitHub asset redirect was not HTTPS: {url}")
@@ -350,7 +351,10 @@ impl fmt::Display for GitHubError {
                 status,
                 reason,
                 url,
-            } => write!(formatter, "GitHub request returned HTTP {status} {reason}: {url}"),
+            } => write!(
+                formatter,
+                "GitHub request returned HTTP {status} {reason}: {url}"
+            ),
             Self::Http { operation, source } => write!(formatter, "{operation}: {source}"),
             Self::Read { operation, source } => write!(formatter, "{operation}: {source}"),
             Self::Json(source) => write!(formatter, "parse GitHub release metadata: {source}"),
@@ -558,10 +562,7 @@ mod tests {
     fn refuses_to_guess_between_multiple_wasm_assets() {
         let release = ReleaseResponse {
             tag_name: "v1.2.3".to_owned(),
-            assets: vec![
-                asset("b.wasm", "uploaded"),
-                asset("a.wasm", "uploaded"),
-            ],
+            assets: vec![asset("b.wasm", "uploaded"), asset("a.wasm", "uploaded")],
         };
 
         let error = select_wasm_asset(&release, None, None).unwrap_err();
@@ -584,8 +585,7 @@ mod tests {
             ],
         };
 
-        let selected =
-            select_wasm_asset(&release, None, Some("zjstatus.wasm")).unwrap();
+        let selected = select_wasm_asset(&release, None, Some("zjstatus.wasm")).unwrap();
 
         assert_eq!(selected.name, "zjstatus.wasm");
     }
@@ -600,12 +600,8 @@ mod tests {
             ],
         };
 
-        let selected = select_wasm_asset(
-            &release,
-            Some("zjframes.wasm"),
-            Some("zjstatus.wasm"),
-        )
-        .unwrap();
+        let selected =
+            select_wasm_asset(&release, Some("zjframes.wasm"), Some("zjstatus.wasm")).unwrap();
 
         assert_eq!(selected.name, "zjframes.wasm");
     }

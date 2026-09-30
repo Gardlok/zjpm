@@ -47,10 +47,7 @@ impl Installer {
         blob: BlobReceipt,
     ) -> Result<InstallReceipt, InstallError> {
         validate_plugin_name(name).map_err(InstallError::InvalidPluginName)?;
-        let version_path = self
-            .store
-            .paths()
-            .version_blob_path(name, &blob.sha256)?;
+        let version_path = self.store.paths().version_blob_path(name, &blob.sha256)?;
         let current_path = self.activate_verified_blob(name, &blob.sha256)?;
 
         Ok(InstallReceipt {
@@ -106,7 +103,6 @@ impl Installer {
 
         Ok(current_path)
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

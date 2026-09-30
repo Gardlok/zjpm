@@ -160,8 +160,7 @@ fn install_github(
     let installer = Installer::new(paths.clone());
     let client = GitHubClient::from_env();
 
-    let installed =
-        client.install_latest(repository, &installer, &name, requested_asset)?;
+    let installed = client.install_latest(repository, &installer, &name, requested_asset)?;
     let plugin_source = PluginSource::GitHub {
         owner: repository.owner().to_owned(),
         repo: repository.repo().to_owned(),

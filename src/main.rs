@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use std::error::Error;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use zjpm::{
     GitHubClient, GitHubRepository, Installer, LockedPlugin, Lockfile, Manifest, PluginSource,

@@ -1,5 +1,5 @@
 use crate::manifest::validate_plugin_name;
-use crate::{ContentStore, ContentStoreError, StorePaths};
+use crate::{BlobReceipt, ContentStore, ContentStoreError, StorePaths};
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -28,7 +28,7 @@ impl Installer {
     pub fn install_path(&self, name: &str, source: &Path) -> Result<InstallReceipt, InstallError> {
         validate_plugin_name(name).map_err(InstallError::InvalidPluginName)?;
         let blob = self.store.ingest_wasm_path(source)?;
-        self.finish_install(name, blob.sha256, blob.bytes, blob.reused)
+        self.activate_ingested(name, blob)
     }
 
     pub fn install_reader<R: Read>(
@@ -38,7 +38,26 @@ impl Installer {
     ) -> Result<InstallReceipt, InstallError> {
         validate_plugin_name(name).map_err(InstallError::InvalidPluginName)?;
         let blob = self.store.ingest_wasm(reader)?;
-        self.finish_install(name, blob.sha256, blob.bytes, blob.reused)
+        self.activate_ingested(name, blob)
+    }
+
+    pub fn activate_ingested(
+        &self,
+        name: &str,
+        blob: BlobReceipt,
+    ) -> Result<InstallReceipt, InstallError> {
+        validate_plugin_name(name).map_err(InstallError::InvalidPluginName)?;
+        let version_path = self.store.paths().version_blob_path(name, &blob.sha256)?;
+        let current_path = self.activate_verified_blob(name, &blob.sha256)?;
+
+        Ok(InstallReceipt {
+            name: name.to_owned(),
+            sha256: blob.sha256,
+            bytes: blob.bytes,
+            blob_reused: blob.reused,
+            version_path,
+            current_path,
+        })
     }
 
     pub fn activate_blob(&self, name: &str, sha256: &str) -> Result<PathBuf, InstallError> {
@@ -50,6 +69,10 @@ impl Installer {
             });
         }
 
+        self.activate_verified_blob(name, sha256)
+    }
+
+    fn activate_verified_blob(&self, name: &str, sha256: &str) -> Result<PathBuf, InstallError> {
         let paths = self.store.paths();
         let blob_path = paths.blob_path(sha256)?;
         let version_path = paths.version_blob_path(name, sha256)?;
@@ -79,26 +102,6 @@ impl Installer {
         })?;
 
         Ok(current_path)
-    }
-
-    fn finish_install(
-        &self,
-        name: &str,
-        sha256: String,
-        bytes: u64,
-        blob_reused: bool,
-    ) -> Result<InstallReceipt, InstallError> {
-        let version_path = self.store.paths().version_blob_path(name, &sha256)?;
-        let current_path = self.activate_blob(name, &sha256)?;
-
-        Ok(InstallReceipt {
-            name: name.to_owned(),
-            sha256,
-            bytes,
-            blob_reused,
-            version_path,
-            current_path,
-        })
     }
 }
 

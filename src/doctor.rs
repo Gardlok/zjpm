@@ -599,7 +599,7 @@ mod tests {
         fs::remove_file(&current).unwrap();
         fs::write(&current, minimal_wasm(b"different")).unwrap();
 
-        let report = Doctor::new(paths).audit().unwrap();
+        let report = Doctor::new(paths.clone()).audit().unwrap();
 
         assert!(has_code(&report, "checksum-mismatch"));
         assert!(report.error_count() >= 1);
